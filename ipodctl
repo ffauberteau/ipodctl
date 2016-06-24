@@ -1,0 +1,116 @@
+#!/usr/bin/env python2
+# -*- encoding: utf-8 -*-
+
+# Copyright (c) 2015, Frédéric Fauberteau
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+# 1. Redistributions of source code must retain the above copyright notice,
+#    this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+# 3. Neither the name of the copyright holder nor the names of its
+#    contributors may be used to endorse or promote products derived from this
+#    software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+import argparse
+import gtk
+import os
+import sys
+
+from gpod import ipod
+from mutagen.mp3 import MP3
+
+PROG='ipodctl'
+DESCR='Control iPod from command line'
+VERSION='0.0.1'
+
+class IpodControl():
+    
+    def __init__(self, mountpoint='/mnt/ipod'):
+        self._db = ipod.Database(mountpoint)
+
+    def __del__(self):
+        try:
+            self._db.close()
+        except AttributeError:
+            pass
+
+    def _add_file(self, fn):
+        try:
+            track = self._db.new_Track(filename=fn)
+            audio = MP3(fn)
+            for key, value in audio.iteritems():
+                if key.startswith('APIC'):
+                    loader = gtk.gdk.PixbufLoader()
+                    loader.write(audio[key].data)
+                    loader.close()
+                    track.set_coverart(loader.get_pixbuf())
+            track.copy_to_ipod()
+        except ipod.TrackException:
+            # TODO: something
+            pass
+
+    def add(self, namespace):
+        for path in namespace.files:
+           if os.path.isdir(path):
+               for fn in os.listdir(path):
+                   ffn = path + os.path.sep + fn
+                   if os.path.isfile(ffn):
+                       self._add_file(ffn)
+           else:
+               self._add_file(path)
+
+    def clear(self, namespace):
+        while (len(self._db)):
+            self._db.remove(self._db[-1])
+
+    def list(self, namespace):
+        for n in range(len(self._db)):
+            print '{id}:{artist} - {album} - {title}'.format(
+                    id=n, **{x: self._db[n][x] for x in ('artist', 'album', 'title')})
+
+    def remove(self, namespace):
+        # XXX: it doesn't work since it seems to be a
+        #      concurrent iterator
+        for n in namespace.tracks:
+            self._db.remove(self._db[n])
+
+def main():
+    parser = argparse.ArgumentParser(PROG, description=DESCR, version=VERSION,
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('-m', '--mnt', default='/mnt/ipod', help='mountpoint of the iPod')
+    subparsers = parser.add_subparsers(title='commands', dest='cmd')
+    parser_add = subparsers.add_parser('add', help='add content to the iPod')
+    parser_add.add_argument('files', nargs='*')
+    parser_clear = subparsers.add_parser('clear', help='remove all content from the iPod')
+    parser_list = subparsers.add_parser('list', help='list content of the iPod')
+    parser_remove = subparsers.add_parser('remove', help='remove content from the iPod')
+    parser_remove.add_argument('tracks', nargs='*', type=int)
+    args = parser.parse_args()
+    try:
+        ctl = IpodControl(args.mnt)
+        cmd = getattr(ctl, args.cmd)
+        cmd(args)
+    except ipod.DatabaseException as e:
+        # python3
+        #print('{name}: {msg}'.format(name=__file__, msg=e), file=sys.stderr)
+        print >>sys.stderr, '{name}: {msg}'.format(name=__file__, msg=e)
+        return 1
+
+if __name__ == '__main__':
+    sys.exit(main())
